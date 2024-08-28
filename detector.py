@@ -65,7 +65,7 @@ def update_color(image, color):
     white = 255
 
     # Create a mask for non-white pixels
-    mask = np.any(image_rgb != white, axis=-1)
+    mask = np.logical_not(np.all(image_rgb == white, axis=-1))
 
     # Create an output image with the same size and initialize with white color
     output_image = np.full_like(image_rgb, white)  # White in RGB
@@ -101,6 +101,36 @@ def remove_files_with_pattern(directory, pattern):
             print(f"Error removing {file_path}: {e}")
 
 
+def get_file_name(teacher_or_stu,
+                  input_or_output,
+                  rotate_or_updown,
+                  suffix,
+                  index_fomat=None,
+                  is_print=False):
+    assert teacher_or_stu in ['teacher', 'stu'], teacher_or_stu
+    assert input_or_output in ['input', 'output'], input_or_output
+    assert rotate_or_updown in ['rotate', 'updown'], rotate_or_updown
+    assert suffix in ['.mp4', '.png'], suffix
+
+    if suffix in ['.png']:
+        assert index_fomat in ['%04d', '*'], index_fomat
+
+    file_name_parts = [teacher_or_stu,
+                       input_or_output,
+                       rotate_or_updown]
+
+    if suffix in ['.png']:
+        file_name_parts.append(index_fomat)
+
+    file_name = '_'.join(file_name_parts)
+    file_full_name = rf'{file_name}{suffix}'
+
+    if is_print:
+        print(file_full_name)
+
+    return file_full_name
+
+
 def concat_images(left_image, right_image):
     right_image.resize((left_image.width, left_image.height))
     # Get dimensions of both images
@@ -122,6 +152,47 @@ def concat_images(left_image, right_image):
     new_image.paste(right_image, (left_width, 0))
 
     return new_image
+
+
+def concat_images_list(rotate_or_updown):
+    image_paths_list = []
+    dir_path = Path('./frames')
+
+    for teacher_or_stu in ['teacher', 'stu']:
+        file_name_pattern = get_file_name(teacher_or_stu,
+                                                 'output',
+                                                 rotate_or_updown,
+                                                 '.png',
+                                                 index_fomat='*')
+        image_paths = list(dir_path.glob(file_name_pattern))
+
+        image_paths.sort()
+
+        image_paths_list.append(image_paths)
+
+    for left_image_path, right_image_path in zip(*image_paths_list):
+        left_image = Image.open(str(left_image_path))
+        right_image = Image.open(str(right_image_path))
+        new_image = concat_images(left_image, right_image)
+
+        left_index = len(left_image_path.name) - 1
+        right_index = len(right_image_path.name) - 1
+
+        while (left_index >= 0 and right_index >= 0 and
+               left_image_path.name[left_index] == right_image_path.name[right_index]):
+            left_index -= 1
+            right_index -= 1
+
+        output_file_name = left_image_path.name[left_index + 1:]
+
+        if output_file_name.startswith('_'):
+            output_file_name = output_file_name[len('_'):]
+
+        output_file_path = left_image_path.parent / output_file_name
+        print(output_file_path)
+        new_image.save(str(output_file_path))
+
+    print('Completed!')
 
 
 class VideoParser:
@@ -452,6 +523,154 @@ class VideoParser:
 
         return annotated_images
 
+    def process_images(self, teacher_or_stu, rotate_or_updown):
+        # Start recording time
+        start_time = time.time()
+
+        annotated_images = []
+
+        dir_path = Path('./frames')
+
+        input_file_name_pattern = get_file_name(teacher_or_stu,
+                                                'input',
+                                                rotate_or_updown,
+                                                '.png',
+                                                index_fomat='*')
+
+
+        image_paths = list(dir_path.glob(input_file_name_pattern))
+
+        image_paths.sort()
+
+        for image_path in image_paths:
+            mp_image = mp.Image.create_from_file(str(image_path))
+            detection_result = self.detector.detect(mp_image)
+
+            handedness_list = detection_result.handedness
+            hand_landmarks_list = detection_result.hand_landmarks
+
+            print(image_path.name,
+                  ', '.join('{}: {:.3}'.format(handedness[0].category_name,
+                                               handedness[0].score)
+                  for handedness in handedness_list))
+
+            if len(handedness_list) == 1:
+                for handedness, hand_landmarks in zip(handedness_list, hand_landmarks_list):
+                    category_name = handedness[0].category_name
+
+                    if rotate_or_updown in ['rotate']:
+                        if category_name == 'Right':
+                            handedness[0].category_name = 'Left'
+
+                    if rotate_or_updown in ['updown']:
+                        if category_name == 'Left':
+                            handedness[0].category_name = 'Right'
+
+            if len(handedness_list) == 2:
+                category_names = []
+                mean_xs = []
+
+                for handedness, hand_landmarks in zip(handedness_list, hand_landmarks_list):
+                    category_name = handedness[0].category_name
+                    mean_x = np.mean([landmark.x for landmark in hand_landmarks])
+
+                    category_names.append(category_name)
+                    mean_xs.append(mean_x)
+
+                if len(set(category_names)) == 1:
+                    if mean_xs[0] < mean_xs[1]:
+                        left_hand_index = 0
+                        right_hand_index = 1
+                    else:
+                        left_hand_index = 1
+                        right_hand_index = 0
+
+                    handedness_list[left_hand_index][0].category_name = 'Left'
+                    handedness_list[right_hand_index][0].category_name = 'Right'
+
+            annotated_image = Image.open(str(image_path))
+
+            for handedness, hand_landmarks in zip(handedness_list, hand_landmarks_list):
+                category_name = handedness[0].category_name
+
+                if teacher_or_stu in ['teacher']:
+                    if rotate_or_updown in ['rotate']:
+                        if category_name == 'Left':
+                            foreground_image = self.clockwise_image
+                        elif category_name == 'Right':
+                            foreground_image = self.clockwise_image
+                        else:
+                            print('Error: Unkown category_name:', category_name)
+                    elif rotate_or_updown in ['updown']:
+                        if category_name == 'Left':
+                            foreground_image = self.down_image
+                        elif category_name == 'Right':
+                            foreground_image = self.down_image
+                        else:
+                            print('Error: Unkown category_name:', category_name)
+                elif teacher_or_stu in ['stu']:
+                    if rotate_or_updown in ['rotate']:
+                        if category_name == 'Left':
+                            foreground_image = self.red_counter_clockwise_image
+                        elif category_name == 'Right':
+                            foreground_image = self.red_counter_clockwise_image
+                        else:
+                            print('Error: Unkown category_name:', category_name)
+                    elif rotate_or_updown in ['updown']:
+                        if category_name == 'Left':
+                            foreground_image = self.red_up_image
+                        elif category_name == 'Right':
+                            foreground_image = self.red_up_image
+                        else:
+                            print('Error: Unkown category_name:', category_name)
+                else:
+                    print('Error: Unkown teacher_or_stu:', teacher_or_stu)
+
+                min_x = np.min([landmark.x for landmark in hand_landmarks]) * annotated_image.width
+                max_x = np.max([landmark.x for landmark in hand_landmarks]) * annotated_image.width
+
+                max_dest_width = min(int(max_x + 1 - min_x), annotated_image.width // 5)
+                max_dest_height = annotated_image.height // 5
+                ratio = min(max_dest_width / foreground_image.width,
+                            max_dest_height / foreground_image.height)
+                dest_width = int(foreground_image.width * ratio)
+                dest_height = int(foreground_image.height * ratio)
+
+                resized_foreground_image = foreground_image.resize((dest_width, dest_height))
+                foreground_arr = np.asarray(resized_foreground_image)
+
+                bbox = [int(min_x), 0]
+                # mask = np.zeros_like(foreground_arr)
+                # mask[foreground_arr != 255] = 255
+                mask = np.logical_not(np.all(foreground_arr == 255, axis=-1))
+                mask = Image.fromarray(mask).convert('L')
+                annotated_image.paste(resized_foreground_image, bbox, mask=mask)
+
+            # annotated_image_arr = np.asarray(annotated_image)
+            # annotated_image_arr = cv2.cvtColor(annotated_image_arr,
+            #                                    cv2.COLOR_RGB2BGR)
+
+            frame_file_path = dir_path / image_path.name.replace('input', 'output')
+            # cv2.imwrite(str(frame_file_path), annotated_image_arr)
+            # annotated_images.append(annotated_image_arr)
+            annotated_image.save(str(frame_file_path))
+            annotated_images.append(annotated_image)
+
+        # End time
+        end_time = time.time()
+
+        # Calculate the duration
+        total_seconds = end_time - start_time
+
+        # Convert to minutes and seconds
+        minutes = int(total_seconds // 60)
+        seconds = total_seconds % 60
+
+        # Print the time duration
+        print(f"Time duration: {minutes} minutes and {seconds:.2f} seconds")
+
+        return annotated_images
+
     def process_up_down_video(self, input_video_path, output_video_path, is_teacher):
         # Start recording time
         start_time = time.time()
@@ -645,62 +864,86 @@ straight_arrow_path = 'straight_arrow_formatted.png'
 clockwise_arrow_path = 'rotated_image.png'
 
 
-# video_parser = VideoParser(straight_arrow_path,
-#                            clockwise_arrow_path,
-#                            running_mode=vision.RunningMode.IMAGE)
-video_parser = VideoParser(straight_arrow_path,
-                           clockwise_arrow_path,
-                           running_mode=vision.RunningMode.VIDEO)
+def test():
+    # video_parser = VideoParser(straight_arrow_path,
+    #                            clockwise_arrow_path,
+    #                            running_mode=vision.RunningMode.IMAGE)
+    video_parser = VideoParser(straight_arrow_path,
+                               clockwise_arrow_path,
+                               running_mode=vision.RunningMode.VIDEO)
 
-input_video_path = 'input_cut_rotate.mp4'
-output_video_path = 'output_cut_rotate.mp4'
-frames = video_parser.process_clockwise_video(input_video_path,
-                                              output_video_path,
-                                              is_teacher=True)
+    input_video_path = 'input_cut_rotate.mp4'
+    output_video_path = 'output_cut_rotate.mp4'
+    frames = video_parser.process_clockwise_video(input_video_path,
+                                                  output_video_path,
+                                                  is_teacher=True)
 
+    input_video_path = 'input_cut_down.mp4'
+    output_video_path = 'output_cut_down.mp4'
 
+    frames = video_parser.process_up_down_video(input_video_path,
+                                                output_video_path,
+                                                is_teacher=True)
 
-input_video_path = 'input_cut_down.mp4'
-output_video_path = 'output_cut_down.mp4'
-
-frames = video_parser.process_up_down_video(input_video_path,
-                                            output_video_path,
-                                            is_teacher=True)
-
-input_video_path = 'stu_input_cut_rotate.mp4'
-output_video_path = 'stu_output_cut_rotate.mp4'
-frames = video_parser.process_clockwise_video(input_video_path,
-                                              output_video_path,
-                                              is_teacher=False)
-
+    input_video_path = 'stu_input_cut_rotate.mp4'
+    output_video_path = 'stu_output_cut_rotate.mp4'
+    frames = video_parser.process_clockwise_video(input_video_path,
+                                                  output_video_path,
+                                                  is_teacher=False)
 
 
-input_video_path = 'stu_input_cut_down.mp4'
-output_video_path = 'stu_output_cut_down.mp4'
 
-frames = video_parser.process_up_down_video(input_video_path,
-                                            output_video_path,
-                                            is_teacher=False)
+    input_video_path = 'stu_input_cut_down.mp4'
+    output_video_path = 'stu_output_cut_down.mp4'
 
+    frames = video_parser.process_up_down_video(input_video_path,
+                                                output_video_path,
+                                                is_teacher=False)
 
-# input_video_path = '慕容横屏2.mp4'
+    video_parser = VideoParser(straight_arrow_path,
+                               clockwise_arrow_path,
+                               running_mode=vision.RunningMode.IMAGE)
 
-# seconds = [4]
-# seconds = [39, 40, 58, 59, 63, 64, 65,
-#             60 + 24, 60 + 27, 60 + 28,
-#             60 + 29, 60 + 32]
+    frames = video_parser.process_images('teacher', 'rotate')
 
-# dest_shape = (640, 640)
+    frames = video_parser.process_images('stu', 'rotate')
 
-# video_parser = VideoParser(straight_arrow_path,
-#                            clockwise_arrow_path,
-#                            running_mode=vision.RunningMode.IMAGE)
+    frames = video_parser.process_images('teacher', 'updown')
 
-# frame_infos = video_parser.get_frames(input_video_path, seconds)
+    frames = video_parser.process_images('stu', 'updown')
 
-# video_parser.save_frames(frame_infos)
+    concat_images_list('rotate')
+    concat_images_list('updown')
 
-# print(len(frame_infos))
+    # input_video_path = '慕容横屏2.mp4'
 
-# for image_file_name in image_file_names:
-#     video_parser.detect(image_file_name, dest_shape)
+    # seconds = [4]
+    # seconds = [39, 40, 58, 59, 63, 64, 65,
+    #             60 + 24, 60 + 27, 60 + 28,
+    #             60 + 29, 60 + 32]
+
+    # dest_shape = (640, 640)
+
+    # video_parser = VideoParser(straight_arrow_path,
+    #                            clockwise_arrow_path,
+    #                            running_mode=vision.RunningMode.IMAGE)
+
+    # frame_infos = video_parser.get_frames(input_video_path, seconds)
+
+    # video_parser.save_frames(frame_infos)
+
+    # print(len(frame_infos))
+
+    # for image_file_name in image_file_names:
+    #     video_parser.detect(image_file_name, dest_shape)
+
+    # input_video_path = 'stu_input_cut_rotate.mp4'
+    # seconds = [0]
+
+    # video_parser = VideoParser(straight_arrow_path,
+    #                            clockwise_arrow_path,
+    #                            running_mode=vision.RunningMode.IMAGE)
+
+    # frame_infos = video_parser.get_frames(input_video_path, seconds)
+
+    # video_parser.save_frames(frame_infos)
