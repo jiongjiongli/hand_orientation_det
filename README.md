@@ -97,6 +97,8 @@ frames = video_parser.process_images('stu', 'updown', False)
 concat_images_list('updown', False)
 
 !ffmpeg -y -framerate 29.54 -i frames/output_updown_%04d.png -c:v libx264 -profile:v high -pix_fmt yuv420p -r 29.54 -b:v 1986k -c:a aac -b:a 128k output_updown.mp4
+
+echo "Completed!"
 ```
 
 # Run with stu_correct
@@ -165,6 +167,8 @@ frames = video_parser.process_images('stu', 'updown')
 concat_images_list('updown')
 
 !ffmpeg -y -framerate 29.54 -i frames/output_updown_stu_correct_%04d.png -c:v libx264 -profile:v high -pix_fmt yuv420p -r 29.54 -b:v 1986k -c:a aac -b:a 128k output_updown_stu_correct.mp4
+
+echo "Completed!"
 ```
 
 
@@ -175,11 +179,11 @@ concat_images_list('updown')
 
     1.1 读取视频，提取每一帧图像。
 
-    1.2 手势检测模型对每一帧图像检测是左手还是右手，和手部的21个关键点坐标
+    1.2 手势检测模型对每一帧图像检测是左手还是右手，和手部的21个关键点坐标。（使用了模型）
 
-    1.3 手势方向检测模型读取连续帧，识别哪些帧有以下四个手势之一：上，下，顺时针，逆时针。（目前人工操作，没有用模型）
+    1.3 手势方向检测模型读取连续帧，识别哪些帧有以下四个手势之一：上，下，顺时针，逆时针。（目前人工操作，没有用模型，因为没有现成的准确率高的模型）
 
-2. 从老师视频截取与学生视频相似的帧（如上下，或者顺时针逆时针），判断学生操作是否正确。（目前人工操作，没有用模型）
+2. 判断老师和学生的手势判断是否一致（如上下，或者顺时针逆时针），判断学生操作是否正确。
 
 3. 给手部的顶端画上手势。并使用颜色表明手势是否正确：橙色表示正确，红色表示错误。
 

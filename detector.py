@@ -4,6 +4,8 @@ import math
 from pathlib import Path
 import time
 from PIL import Image, ImageDraw
+import subprocess
+import numpy as np
 
 from google.colab.patches import cv2_imshow
 import mediapipe as mp
@@ -11,7 +13,6 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
-import numpy as np
 
 
 MARGIN = 10  # pixels
@@ -203,6 +204,29 @@ def concat_images_list(rotate_or_updown, stu_correct=True):
         new_image.save(str(output_file_path))
 
     print('Completed!')
+
+
+def run_command(command):
+    # # Define the ffmpeg command as a string
+    # command = "ffmpeg -y -framerate 29.54 -i frames/output_updown_stu_correct_%04d.png -c:v libx264 -profile:v high -pix_fmt yuv420p -r 29.54 -b:v 1986k -c:a aac -b:a 128k output_updown_stu_correct.mp4"
+    command = "ffmpeg -y -i teacher_input_rotate.mp4 -vsync 0 frames/teacher_input_rotate_%04d.png"
+
+    # Run the command and capture output
+    try:
+        print("Running command:")
+        print(command)
+        result = subprocess.run(command, shell=True, check=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        # Print the captured output
+        print("Output:")
+        print(result.stdout)
+        print(result.stderr)
+        print("Video created successfully!")
+    except subprocess.CalledProcessError as e:
+        print(f"An error occurred while creating the video: {e}")
+        print("Output:\n", e.stdout)
+        print("Error:\n", e.stderr)
 
 
 class VideoParser:
