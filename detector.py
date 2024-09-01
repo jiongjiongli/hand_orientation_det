@@ -15,51 +15,9 @@ from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 
 
-MARGIN = 10  # pixels
-FONT_SIZE = 1
-FONT_THICKNESS = 1
-HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
-
 straight_arrow_path = 'straight_arrow_formatted.png'
 clockwise_arrow_path = 'rotated_image.png'
 frame_dir_path = Path('./frames')
-
-
-def draw_landmarks_on_image(rgb_image, detection_result):
-    hand_landmarks_list = detection_result.hand_landmarks
-    handedness_list = detection_result.handedness
-    annotated_image = np.copy(rgb_image)
-
-    # Loop through the detected hands to visualize.
-    for idx in range(len(hand_landmarks_list)):
-        hand_landmarks = hand_landmarks_list[idx]
-        handedness = handedness_list[idx]
-
-        # Draw the hand landmarks.
-        hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        hand_landmarks_proto.landmark.extend([
-          landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
-        ])
-        solutions.drawing_utils.draw_landmarks(
-          annotated_image,
-          hand_landmarks_proto,
-          solutions.hands.HAND_CONNECTIONS,
-          solutions.drawing_styles.get_default_hand_landmarks_style(),
-          solutions.drawing_styles.get_default_hand_connections_style())
-
-    # Get the top left corner of the detected hand's bounding box.
-    height, width, _ = annotated_image.shape
-    x_coordinates = [landmark.x for landmark in hand_landmarks]
-    y_coordinates = [landmark.y for landmark in hand_landmarks]
-    text_x = int(min(x_coordinates) * width)
-    text_y = int(min(y_coordinates) * height) - MARGIN
-
-    # Draw handedness (left or right hand) on the image.
-    cv2.putText(annotated_image, f"{handedness[0].category_name}",
-                (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
-                FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
-
-    return annotated_image
 
 
 def update_color(image, color):
@@ -79,15 +37,6 @@ def update_color(image, color):
     # Set color in the output image where mask is True
     output_image[mask] = color
 
-    # Convert back to BGR for OpenCV compatibility
-    # output_image_bgr = cv2.cvtColor(output_image, cv2.COLOR_RGB2BGR)
-
-    # Save or display the result
-    # cv2.imwrite('output_image.jpg', output_image_bgr)
-    # cv2.imshow('Result', output_image_bgr)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
-    # return output_image_bgr
     return Image.fromarray(output_image, mode='RGB')
 
 
@@ -209,7 +158,7 @@ def concat_images_list(rotate_or_updown, stu_correct=True):
 def run_command(command):
     # # Define the ffmpeg command as a string
     # command = "ffmpeg -y -framerate 29.54 -i frames/output_updown_stu_correct_%04d.png -c:v libx264 -profile:v high -pix_fmt yuv420p -r 29.54 -b:v 1986k -c:a aac -b:a 128k output_updown_stu_correct.mp4"
-    command = "ffmpeg -y -i teacher_input_rotate.mp4 -vsync 0 frames/teacher_input_rotate_%04d.png"
+    # command = "ffmpeg -y -i teacher_input_rotate.mp4 -vsync 0 frames/teacher_input_rotate_%04d.png"
 
     # Run the command and capture output
     try:
@@ -275,16 +224,6 @@ class VideoParser:
         detector = vision.HandLandmarker.create_from_options(hand_options)
 
         return detector
-
-    def resize(self, image, dest_height, dest_width):
-        h, w = image.shape[:2]
-
-        if h < w:
-            img = cv2.resize(image, (dest_width, math.floor(h/(w/dest_width))))
-        else:
-            img = cv2.resize(image, (math.floor(w/(h/dest_height)), dest_height))
-
-        return img
 
     def detect(self, image_path, teacher_or_stu, rotate_or_updown, stu_correct):
         mp_image = mp.Image.create_from_file(str(image_path))
@@ -391,29 +330,20 @@ class VideoParser:
             mask = Image.fromarray(mask).convert('L')
             background_image.paste(resized_foreground_image, bbox, mask=mask)
 
-        # annotated_image_arr = np.asarray(annotated_image)
-        # annotated_image_arr = cv2.cvtColor(annotated_image_arr,
-        #                                    cv2.COLOR_RGB2BGR)
-
-        frame_file_path = frame_dir_path / image_path.name.replace('input', 'output')
-        # cv2.imwrite(str(frame_file_path), annotated_image_arr)
-        annotated_image.save(str(frame_file_path))
         return annotated_image
 
-    def process_images(self, teacher_or_stu, rotate_or_updown, stu_correct=True):
+    def process_images(self,
+                       input_file_path_pattern,
+                       output_dir,
+                       teacher_or_stu,
+                       rotate_or_updown,
+                       stu_correct=True):
         # Start recording time
         start_time = time.time()
 
         annotated_images = []
 
-        input_file_name_pattern = get_file_name(teacher_or_stu,
-                                                'input',
-                                                rotate_or_updown,
-                                                stu_correct,
-                                                '.png',
-                                                index_format='*')
-
-        image_paths = list(frame_dir_path.glob(input_file_name_pattern))
+        image_paths = list(input_file_path_pattern.parent.glob(input_file_path_pattern.name))
         image_paths.sort()
 
         for image_path in image_paths:
@@ -421,7 +351,8 @@ class VideoParser:
                                           teacher_or_stu,
                                           rotate_or_updown,
                                           stu_correct)
-
+            frame_file_path = output_dir / image_path.name.replace('input', 'output')
+            annotated_image.save(str(frame_file_path))
             annotated_images.append(annotated_image)
 
         # End time
@@ -439,8 +370,107 @@ class VideoParser:
 
         return annotated_images
 
+    def process_predefined_images(self, teacher_or_stu, rotate_or_updown, stu_correct=True):
+        input_file_name_pattern = get_file_name(teacher_or_stu,
+                                                'input',
+                                                rotate_or_updown,
+                                                stu_correct,
+                                                '.png',
+                                                index_format='*')
+        input_file_path_pattern = frame_dir_path / input_file_name_pattern
+        output_dir = frame_dir_path
+        self.process_images(input_file_path_pattern,
+                            output_dir,
+                            teacher_or_stu,
+                            rotate_or_updown,
+                            stu_correct=stu_correct)
+        return annotated_images
+
+
+def get_input_images(teacher_or_stu, input_video_path):
+    assert teacher_or_stu in ['teacher', 'stu'], teacher_or_stu
+
+    # input_video_path = 'teacher_input_video.mp4'
+    input_image_name_pattern = rf'{teacher_or_stu}_input_image_%04d.png'
+    input_image_search_pattern = rf'{teacher_or_stu}_input_image_*.png'
+    remove_files_with_pattern(frame_dir_path, input_image_search_pattern)
+
+    input_video_path = Path(input_video_path)
+    assert input_video_path.exists(), input_video_path
+
+    input_image_path_pattern = frame_dir_path / input_image_name_pattern
+    command = rf"ffmpeg -y -i {input_video_path} -vsync 0 {input_image_path_pattern}"
+    run_command(command)
+
+    print('Completed!')
+    return input_image_name_pattern
+
+
+def get_output_images(input_video_path, input_image_name_pattern, parse_results, teacher_or_stu, action, same_action):
+    assert action in ['up', 'down', 'clockwise', 'counter_clockwise'], action
+    output_image_search_pattern = rf'{teacher_or_stu}_output_image_*.png'
+    remove_files_with_pattern(frame_dir_path, output_image_search_pattern)
+
+    video_parser.get_output_images(parse_results, teacher_or_stu, action, same_action)
+    print('Completed!')
+
+def merge_images(teacher_input_video_path, stu_input_video_path, teacher_action, stu_action):
+    output_image_name_pattern = rf'output_image_%04d.png'
+    output_image_search_pattern = rf'output_image_*.png'
+    output_video_path = 'output_video.mp4'
+    remove_files_with_pattern(frame_dir_path, output_image_search_pattern)
+    concat_images_list()
+
 
 def test():
+    frame_dir_path.mkdir(parents=True, exist_ok=True)
+    # remove_files_with_pattern(frame_dir_path, '*.*')
+    input_video_dict = {
+        'teacher': 'teacher_input_video.mp4',
+        'stu': 'stu_input_video.mp4'
+    }
+
+    info_dict = {}
+
+    for teacher_or_stu, input_video_path in input_video_dict.items():
+        input_image_name_pattern = get_input_images(teacher_or_stu, input_video_path)
+        det_results = video_parser.predict_landmarks(frame_dir_path, input_image_name_pattern)
+        action = video_parser.predict_action(det_results)
+
+        info_dict[teacher_or_stu] = {
+            'input_video_path': input_video_path,
+            'input_image_name_pattern': input_image_name_pattern,
+            'parse_results': parse_results,
+            'action': action
+        }
+
+    same_action = info_dict['teacher']['action'] == info_dict['stu']['action']
+
+    for teacher_or_stu, info in info_dict.items():
+        get_output_images(info['input_video_path'],
+                          info['input_image_name_pattern'],
+                          info['parse_results'],
+                          teacher_or_stu,
+                          info['action'],
+                          same_action)
+
+        # Generate video
+        output_video_path = info['input_video_path'].parent / info['input_video_path'].name.replace('input', 'output')
+
+        output_image_path_pattern = frame_dir_path / info['input_image_name_pattern'].replace('input', 'output')
+        command = rf"ffmpeg -y -framerate 29.54 -i {output_image_path_pattern} -c:v libx264 -profile:v high -pix_fmt yuv420p -r 29.54 -b:v 1986k -c:a aac -b:a 128k {output_video_path}"
+        run_command(command)
+
+    merge_images(input_video_dict['teacher'], input_video_dict['stu'], info_dict['teacher']['action'], info_dict['stu']['action'])
+
+    # Generate video
+    output_image_path_pattern = frame_dir_path / output_image_name_pattern
+    command = rf"ffmpeg -y -framerate 29.54 -i {output_image_path_pattern} -c:v libx264 -profile:v high -pix_fmt yuv420p -r 29.54 -b:v 1986k -c:a aac -b:a 128k {output_video_path}"
+    run_command(command)
+
+    print('Completed!')
+
+
     video_parser = VideoParser(straight_arrow_path,
                                clockwise_arrow_path,
                                running_mode=vision.RunningMode.IMAGE)
